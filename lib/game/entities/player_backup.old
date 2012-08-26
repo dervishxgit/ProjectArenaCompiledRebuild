@@ -1,0 +1,344 @@
+//(c)opyright  2012 - Steve Miller
+
+ig.module(
+	'game.entities.player'
+)
+.requires(
+	'impact.entity',
+    'game.entities.projectile'
+)
+.defines(function () {
+
+    var testPunchSettings = {
+        flip: false,
+        bWatchSpawnerPosition: true, 
+        referenceSpawner: null,
+        lifeTime: 100,
+        offsetSpawnOrigin: {x: 100, y: 0},
+        punchString: "",
+    };
+
+    EntityPlayer = ig.Entity.extend({
+
+        // The players (collision) size is a bit smaller than the animation
+        // frames, so we have to move the collision box a bit (offset)
+        size: { x: 100, y: 100 },
+        //offset: {x: 4, y: 2},
+
+        maxVel: { x: 400, y: 1000 },
+        //maxVel: {x: 100, y: 200},
+        friction: { x: 4000, y: 0 },
+
+        offset: {
+            x: 50,
+            y: 100
+        },
+
+        type: ig.Entity.TYPE.A, // Player friendly group
+        checkAgainst: ig.Entity.TYPE.B,
+        collides: ig.Entity.COLLIDES.PASSIVE,
+
+        //animSheet: new ig.AnimationSheet( 'media/playerLarge.png', 32, 48 ),	
+        //animSheet: new ig.AnimationSheet('media/testPlayerLarger.png', 100, 100),
+        animSheet: new ig.AnimationSheet('media/Wood_spritesheet.png', 200, 200),
+
+
+        // These are our own properties. They are not defined in the base
+        // ig.Entity class. We just use them internally for the Player
+        //flip: true,
+        accelGround: 1600,
+        accelAir: 4000,
+        jump: 500,
+        candoublejump: false,
+        leftdodgepressed01: false,
+        leftdodgepressed02: false,
+        rightdodgepressed01: false,
+        rightdodgepressed02: false,
+        dodgetimer: 2,
+        dodgecooldown: 30,
+        health: 100,
+        armor: 0,
+        flip: false,
+
+        poisonCarrier: false,
+        poisonFrogRef: null,
+
+        name: "player",
+        gamename: playername,
+
+        messagebox: "",
+        messageboxtimer: 0,
+
+        //bounciness: 1,
+
+        //net
+        nettimer: 10,
+        iNetAnim: 0,
+
+        //punch
+        punchBasicString: "punchBasic",
+        offsetSpawnOrigin: {x: 100, y: 0}, //the coords of where we spawn projectiles, additive as offset
+
+        init: function (x, y, settings) {
+            this.parent(x, y, settings);
+
+
+            /*//old testing anims
+            this.addAnim('idle', 1, [1]);
+            this.addAnim('run', 0.07, [1]);
+            this.addAnim('jump', 0.5, [0]);
+            this.addAnim('fall', 0.4, [0]);*/
+
+            this.setupAnimation();
+
+            //add ourself to the game's player list
+            //ig.game.playerList.thisPlayer = this;
+
+            //set self as the spawner in testPunchSettings
+            testPunchSettings.referenceSpawner = this;
+
+            //broadcast player init to all other players so that they run a clone
+            socket.emit('initializeplayer', this.gamename);
+
+        },
+
+        setupAnimation: function() {
+            // sets all the animation states for the player, currently using a test sprite
+            this.addAnim( 'run', 0.16, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] );
+            this.addAnim( 'idle', 0.16, [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23] );
+            this.addAnim( 'swingattack', .66, [24, 25, 26, 27] );
+            this.addAnim( 'punchattack', .66, [28, 29, 30, 31] );
+            this.addAnim( 'swingattackreverse', .66, [98, 99, 100, 101] );
+            this.addAnim( 'punchattackreverse', .66, [102, 103, 104, 105] );
+            this.addAnim( 'pain', .66, [32, 33, 34, 35] );
+            this.addAnim( 'block', .5, [36, 37, 38] );
+            this.addAnim( 'dodge', .5, [39, 40, 41] );
+            this.addAnim( 'duck', .5, [42, 43, 44] );
+            this.addAnim( 'duckattack', .66, [45, 46, 47, 48] );
+            this.addAnim( 'jump', .5, [49, 50, 51] );
+            this.addAnim( 'idleairidle', .5, [52, 53, 54] );
+            this.addAnim( 'idledoublejump', .5, [55, 56, 57] );
+            this.addAnim( 'forwardjump', .5, [58, 59, 60] );
+            this.addAnim( 'forwardairidle', .5, [61, 62, 63] );
+            this.addAnim( 'forwarddoublejump', .5, [64, 65, 66] );
+            this.addAnim( 'backwardjump', .5, [67, 68, 69] );
+            this.addAnim( 'backwardairidle', .5, [70, 71, 72] );
+            this.addAnim( 'backwarddoublejump', .5, [73, 74, 75] );
+            this.addAnim( 'fall', .5, [76, 77, 78] );
+            this.addAnim( 'airdodge', .5, [79, 80, 81] );
+            this.addAnim( 'victory', 1.33, [82, 83, 84, 85, 86, 87, 88, 89] );
+            this.addAnim( 'death', 1.33, [90, 91, 92, 93, 94, 95, 96, 97] );
+        },
+
+        messageBoxWrite: function(string) {
+            this.messagebox = this.messagebox + string;
+        },
+
+        //custom receive damage function includes armor checking
+        receiveDamage: function(amount) {
+            var damage = amount;
+            if (this.armor > 0) {
+                var oldArmorValue = this.armor;
+                this.armor = this.armor - damage;
+                if (this.armor < 0) {this.armor = 0;}
+                damage = damage - oldArmorValue;
+                if (damage < 0) {damage = 0; return;} else {
+                    //subtract remaining incoming damage from health
+                    this.health = this.health - damage;
+                }
+                
+            } else { this.health = this.health - damage;}
+
+            if( this.health <= 0 ) {
+                this.kill();
+            }
+        },
+
+        check: function(other) {
+            if (this.poisonCarrier && this.poisonFrogRef && !this.poisonFrogRef.poisoningFlag/*&& other.name == 'otherplayer'*/) {
+                this.poisonFrogRef.runPoisonOnOther(this, other);
+                //console.log('poisoned: ' + other);
+            }
+            this.parent(other);
+            //also
+
+        },
+
+        update: function () {
+
+            if (this.dodgecooldown >= 1) {
+                this.dodgecooldown -= 1;
+            }
+            this.dodgetimer -= 1;
+            if (this.dodgetimer <= 1) {
+                this.leftdodgepressed01 = false;
+                this.leftdodgepressed02 = false;
+                this.rightdodgepressed01 = false;
+                this.rightdodgepressed02 = false;
+            }
+
+
+            //reset certain conditions on ground (.standing state)
+            if (this.standing == true) {
+                this.candoublejump = false;
+            }
+
+            // move left or right
+            var accel = this.standing ? this.accelGround : this.accelAir;
+            if (ig.input.state('left')) {
+                //this.vel.x = -1000;
+                this.accel.x = -accel;
+                this.flip = true;
+                this.dodgetimer = 7;
+
+            }
+            else if (ig.input.state('right')) {
+                //this.vel.x = 1000;
+                this.accel.x = accel;
+                this.flip = false;
+                this.dodgetimer = 7;
+            }
+            else {
+                this.accel.x = 0;
+            }
+
+            //also need dodge mechanism
+            if (this.dodgecooldown <= 1) {
+                if (ig.input.released('left')) {
+                    this.leftdodgepressed01 = true;
+                    this.dodgecooldown = 30;
+                } if (ig.input.released('right')) {
+                    this.rightdodgepressed01 = true;
+                    this.dodgecooldown = 30;
+                }
+            }
+
+            if (ig.input.pressed('left') && this.leftdodgepressed01 == true) {
+                this.pos.x -= 100;
+                this.dodgetimer = 0;
+            }
+
+            if (ig.input.pressed('right') && this.rightdodgepressed01 == true) {
+                this.pos.x += 100;
+                this.dodgetimer = 0;
+            }
+
+
+            // jump
+            if (this.standing && ig.input.pressed('jump')) {
+                this.vel.y = -this.jump;
+            }
+
+            //doublejump behavior
+            if (!this.standing && ig.input.pressed('jump') && this.candoublejump == false) {
+                //protection against multiple doublejump
+                this.candoublejump = true;
+                this.vel.y = -this.jump;
+            }
+
+            /*// shoot
+            if( ig.input.pressed('shoot') ) {
+            ig.game.spawnEntity( EntitySlimeGrenade, this.pos.x, this.pos.y, {flip:this.flip} );
+            }*/
+
+            //TESTING: if x is pressed, spawn our test proj entity
+            if (ig.input.pressed('shoot')) {
+                testPunchSettings.flip = this.flip;
+                testPunchSettings.punchString = this.punchBasicString;
+                //we need to check for the flip state and feed spawnposition data
+                if (this.flip){
+                    ig.game.spawnEntity(
+                        EntityBasicpunch, 
+                        this.pos.x - this.offsetSpawnOrigin.x,
+                        this.pos.y + this.offsetSpawnOrigin.y, 
+                        testPunchSettings
+                    );
+                } else if (!this.flip){
+                    ig.game.spawnEntity(
+                        EntityBasicpunch, 
+                        this.pos.x + this.offsetSpawnOrigin.x,
+                        this.pos.y + this.offsetSpawnOrigin.y, 
+                        testPunchSettings
+                    );
+                }
+                
+                //this.messagebox = this.messagebox + "received shoot input";
+
+                /*if (ig.game.projectileLib.testPunchStruct) {
+                    this.messageBoxWrite("yay");
+                    var testinc = ig.game.projectileLib.testPunchStruct.test;
+                    console.log(testinc);
+                    console.log("yay");
+                }*/
+            }
+
+            // set the current animation, based on the player's speed
+            if (this.vel.y < 0) {
+                this.currentAnim = this.anims.jump;
+            }
+            else if (this.vel.y > 0) {
+                this.currentAnim = this.anims.fall;
+            }
+            else if (this.vel.x != 0) {
+                this.currentAnim = this.anims.run;
+            }
+            else {
+                this.currentAnim = this.anims.idle;
+            }
+
+            this.currentAnim.flip.x = !this.flip;
+
+            if (this.nettimer < 1) {
+
+                this.nettimer = 1;
+                var argsArray  = {
+                    positionx: this.pos.x,
+                    positiony: this.pos.y,
+                    iNetAnim: this.iNetAnim,
+                    flip: this.flip,
+                    gamename :this.gamename
+                };
+
+                argsArray.positionx = this.pos.x;
+                argsArray.positiony = this.pos.y;
+                argsArray.iNetAnim = this.iNetAnim;
+                argsArray.flip = this.flip;
+                argsArray.gamename = this.gamename;
+                /*socket.emit('recievedata', this.pos.x, 
+                    this.pos.y, this.iNetAnim, 
+                    this.flip, this.gamename );*/
+                /*console.log(this.pos.x, 
+                    this.pos.y, this.iNetAnim, 
+                    this.flip, this.gamename );*/
+                socket.emit('recievedata', argsArray);
+                //console.log(argsArray);
+            }
+            this.nettimer = this.nettimer - 1;
+
+            this.setNetAnim();
+            // move!
+            this.parent();
+
+
+            //debug output
+          //  console.log(this.health);
+        },
+
+        setNetAnim: function() {
+            //switcher, sets an integer/string based on current anim for net broadcast
+            if (this.currentAnim == this.anims.idle) {
+                this.iNetAnim = 0;
+            }
+            else if (this.currentAnim == this.anims.run) {
+                this.iNetAnim = 1;
+            }
+            else if (this.currentAnim == this.anims.jump) {
+                //console.log("im jumping");
+                this.iNetAnim = 2;
+            }
+            else if (this.currentAnim == this.anims.fall) {
+                this.iNetAnim = 3;
+            }
+        }
+    });
+});
